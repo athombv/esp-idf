@@ -923,6 +923,8 @@ typedef struct xSTATIC_TCB
 	#endif
 	#if ( configGENERATE_RUN_TIME_STATS == 1 )
 		uint32_t		ulDummy16;
+		uint32_t		ulDummy21;
+		uint32_t		ulDummy22;
 	#endif
 	#if ( configUSE_NEWLIB_REENTRANT == 1 )
 		struct	_reent	xDummy17;

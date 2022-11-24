@@ -207,6 +207,8 @@ typedef struct tskTaskControlBlock
 
 	#if ( configGENERATE_RUN_TIME_STATS == 1 )
 		uint32_t		ulRunTimeCounter;	/*< Stores the amount of time the task has spent in the Running state. */
+		uint32_t		ulLastResume;		/*< When was the task last resumed */
+		uint32_t		ulLastSuspend;		/*< When was the task last suspended */
 	#endif
 
 	#if ( configUSE_NEWLIB_REENTRANT == 1 )
@@ -306,7 +308,6 @@ PRIVILEGED_DATA static volatile UBaseType_t uxSchedulerSuspended[ portNUM_PROCES
 PRIVILEGED_DATA static portMUX_TYPE xTaskQueueMutex = portMUX_INITIALIZER_UNLOCKED;
 
 #if ( configGENERATE_RUN_TIME_STATS == 1 )
-
 	PRIVILEGED_DATA static uint32_t ulTaskSwitchedInTime[portNUM_PROCESSORS] = {0U};	/*< Holds the value of a timer/counter the last time a task was switched in on a particular core. */
 	PRIVILEGED_DATA static uint32_t ulTotalRunTime = 0UL;		/*< Holds the total amount of execution time as defined by the run time counter clock. */
 
@@ -986,6 +987,8 @@ UBaseType_t x;
 	#if ( configGENERATE_RUN_TIME_STATS == 1 )
 	{
 		pxNewTCB->ulRunTimeCounter = 0UL;
+		pxNewTCB->ulLastResume = 0UL;
+		pxNewTCB->ulLastSuspend = 0UL;
 	}
 	#endif /* configGENERATE_RUN_TIME_STATS */
 
@@ -2755,6 +2758,7 @@ void vTaskSwitchContext( void )
 				if( ulTotalRunTime > ulTaskSwitchedInTime[ xPortGetCoreID() ] )
 				{
 					pxCurrentTCB[ xPortGetCoreID() ]->ulRunTimeCounter += ( ulTotalRunTime - ulTaskSwitchedInTime[ xPortGetCoreID() ] );
+					pxCurrentTCB[ xPortGetCoreID() ]->ulLastSuspend = ulTotalRunTime;
 				}
 				else
 				{
@@ -2868,6 +2872,12 @@ void vTaskSwitchContext( void )
 
 		traceTASK_SWITCHED_IN();
         xSwitchingContext[ xPortGetCoreID() ] = pdFALSE;
+
+		#if ( configGENERATE_RUN_TIME_STATS == 1 )
+		{
+			pxCurrentTCB[xPortGetCoreID()]->ulLastResume = ulTotalRunTime;
+		}
+		#endif
 
 		//Exit critical region manually as well: release the mux now, interrupts will be re-enabled when we
 		//exit the function.
@@ -3760,6 +3770,8 @@ BaseType_t xTaskGetAffinity( TaskHandle_t xTask )
 				#if ( configGENERATE_RUN_TIME_STATS == 1 )
 				{
 					pxTaskStatusArray[ uxTask ].ulRunTimeCounter = pxNextTCB->ulRunTimeCounter;
+					pxTaskStatusArray[ uxTask ].ulLastResume = pxNextTCB->ulLastResume;
+					pxTaskStatusArray[ uxTask ].ulLastSuspend = pxNextTCB->ulLastSuspend;
 				}
 				#else
 				{
@@ -4397,9 +4409,9 @@ For ESP32 FreeRTOS, vTaskExitCritical implements both portEXIT_CRITICAL and port
 
 				/* Write the rest of the string. */
 #if configTASKLIST_INCLUDE_COREID
-				sprintf( pcWriteBuffer, "\t%c\t%u\t%u\t%u\t%hd\r\n", cStatus, ( unsigned int ) pxTaskStatusArray[ x ].uxCurrentPriority, ( unsigned int ) pxTaskStatusArray[ x ].usStackHighWaterMark, ( unsigned int ) pxTaskStatusArray[ x ].xTaskNumber, ( int ) pxTaskStatusArray[ x ].xCoreID );
+				sprintf( pcWriteBuffer, "\t%c\t%u\t%u\t%u\t%hd\n", cStatus, ( unsigned int ) pxTaskStatusArray[ x ].uxCurrentPriority, ( unsigned int ) pxTaskStatusArray[ x ].usStackHighWaterMark, ( unsigned int ) pxTaskStatusArray[ x ].xTaskNumber, ( int ) pxTaskStatusArray[ x ].xCoreID );
 #else
-				sprintf( pcWriteBuffer, "\t%c\t%u\t%u\t%u\r\n", cStatus, ( unsigned int ) pxTaskStatusArray[ x ].uxCurrentPriority, ( unsigned int ) pxTaskStatusArray[ x ].usStackHighWaterMark, ( unsigned int ) pxTaskStatusArray[ x ].xTaskNumber );
+				sprintf( pcWriteBuffer, "\t%c\t%u\t%u\t%u\n", cStatus, ( unsigned int ) pxTaskStatusArray[ x ].uxCurrentPriority, ( unsigned int ) pxTaskStatusArray[ x ].usStackHighWaterMark, ( unsigned int ) pxTaskStatusArray[ x ].xTaskNumber );
 #endif
 				pcWriteBuffer += strlen( pcWriteBuffer );
 			}
@@ -4497,13 +4509,13 @@ For ESP32 FreeRTOS, vTaskExitCritical implements both portEXIT_CRITICAL and port
 					{
 						#ifdef portLU_PRINTF_SPECIFIER_REQUIRED
 						{
-							sprintf( pcWriteBuffer, "\t%lu\t\t%lu%%\r\n", pxTaskStatusArray[ x ].ulRunTimeCounter, ulStatsAsPercentage );
+							sprintf( pcWriteBuffer, "\t%lu\t\t%lu%%\t%lu\t%lu\n", pxTaskStatusArray[ x ].ulRunTimeCounter, ulStatsAsPercentage, pxTaskStatusArray[ x ].ulLastResume, pxTaskStatusArray[ x ].ulLastSuspend );
 						}
 						#else
 						{
 							/* sizeof( int ) == sizeof( long ) so a smaller
 							printf() library can be used. */
-							sprintf( pcWriteBuffer, "\t%u\t\t%u%%\r\n", ( unsigned int ) pxTaskStatusArray[ x ].ulRunTimeCounter, ( unsigned int ) ulStatsAsPercentage );
+							sprintf( pcWriteBuffer, "\t%u\t\t%u%%\t%u\t%u\n", ( unsigned int ) pxTaskStatusArray[ x ].ulRunTimeCounter, ( unsigned int ) ulStatsAsPercentage, pxTaskStatusArray[ x ].ulLastResume, pxTaskStatusArray[ x ].ulLastSuspend );
 						}
 						#endif
 					}
@@ -4513,13 +4525,13 @@ For ESP32 FreeRTOS, vTaskExitCritical implements both portEXIT_CRITICAL and port
 						consumed less than 1% of the total run time. */
 						#ifdef portLU_PRINTF_SPECIFIER_REQUIRED
 						{
-							sprintf( pcWriteBuffer, "\t%lu\t\t<1%%\r\n", pxTaskStatusArray[ x ].ulRunTimeCounter );
+							sprintf( pcWriteBuffer, "\t%lu\t\t<1%%\t%lu\t%lu\n", pxTaskStatusArray[ x ].ulRunTimeCounter, pxTaskStatusArray[ x ].ulLastResume, pxTaskStatusArray[ x ].ulLastSuspend );
 						}
 						#else
 						{
 							/* sizeof( int ) == sizeof( long ) so a smaller
 							printf() library can be used. */
-							sprintf( pcWriteBuffer, "\t%u\t\t<1%%\r\n", ( unsigned int ) pxTaskStatusArray[ x ].ulRunTimeCounter );
+							sprintf( pcWriteBuffer, "\t%u\t\t<1%%\t%u\t%u\n", ( unsigned int ) pxTaskStatusArray[ x ].ulRunTimeCounter, pxTaskStatusArray[ x ].ulLastResume, pxTaskStatusArray[ x ].ulLastSuspend );
 						}
 						#endif
 					}
